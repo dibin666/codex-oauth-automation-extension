@@ -7,6 +7,7 @@ const {
   getConfiguredIcloudHostPreference,
   getIcloudHostHintFromMessage,
   getIcloudLoginUrlForHost,
+  getIcloudMailUrlForHost,
   getIcloudSetupUrlForHost,
   normalizeBooleanMap,
   normalizeIcloudAliasList,
@@ -24,6 +25,7 @@ test('normalizeIcloudHost and host preference helpers resolve supported hosts', 
   assert.equal(getConfiguredIcloudHostPreference({ icloudHostPreference: 'icloud.com' }), 'icloud.com');
   assert.equal(getConfiguredIcloudHostPreference({ icloudHostPreference: 'auto' }), '');
   assert.equal(getIcloudLoginUrlForHost('icloud.com.cn'), 'https://www.icloud.com.cn/');
+  assert.equal(getIcloudMailUrlForHost('icloud.com'), 'https://www.icloud.com/mail/');
   assert.equal(getIcloudSetupUrlForHost('icloud.com'), 'https://setup.icloud.com/setup/ws/1');
 });
 

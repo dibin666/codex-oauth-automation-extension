@@ -71,6 +71,7 @@ const {
   getConfiguredIcloudHostPreference,
   getIcloudHostHintFromMessage,
   getIcloudLoginUrlForHost,
+  getIcloudMailUrlForHost,
   getIcloudSetupUrlForHost,
   normalizeBooleanMap,
   normalizeIcloudAliasList,
@@ -92,6 +93,7 @@ const ICLOUD_LOGIN_URLS = [
   'https://www.icloud.com.cn/',
   'https://www.icloud.com/',
 ];
+const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
@@ -489,6 +491,7 @@ function normalizeMailProvider(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   switch (normalized) {
     case 'custom':
+    case ICLOUD_PROVIDER:
     case GMAIL_PROVIDER:
     case HOTMAIL_PROVIDER:
     case LUCKMAIL_PROVIDER:
@@ -6777,6 +6780,19 @@ function getMailConfig(state) {
   }
   if (provider === HOTMAIL_PROVIDER) {
     return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（API对接/本地助手）' };
+  }
+  if (provider === ICLOUD_PROVIDER) {
+    const configuredHost = getConfiguredIcloudHostPreference(state)
+      || normalizeIcloudHost(state?.preferredIcloudHost)
+      || 'icloud.com';
+    const loginUrl = getIcloudLoginUrlForHost(configuredHost) || 'https://www.icloud.com/';
+    const mailUrl = getIcloudMailUrlForHost(configuredHost) || loginUrl;
+    return {
+      source: 'icloud-mail',
+      url: mailUrl,
+      label: 'iCloud 邮箱',
+      navigateOnReuse: true,
+    };
   }
   if (provider === GMAIL_PROVIDER) {
     return {

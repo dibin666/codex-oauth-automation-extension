@@ -29,6 +29,13 @@
     return '';
   }
 
+  function getIcloudMailUrlForHost(host) {
+    const normalizedHost = normalizeIcloudHost(host);
+    if (normalizedHost === 'icloud.com') return 'https://www.icloud.com/mail/';
+    if (normalizedHost === 'icloud.com.cn') return 'https://www.icloud.com.cn/mail/';
+    return '';
+  }
+
   function getIcloudSetupUrlForHost(host) {
     const normalizedHost = normalizeIcloudHost(host);
     if (normalizedHost === 'icloud.com') return 'https://setup.icloud.com/setup/ws/1';
@@ -166,6 +173,7 @@
     getConfiguredIcloudHostPreference,
     getIcloudHostHintFromMessage,
     getIcloudLoginUrlForHost,
+    getIcloudMailUrlForHost,
     getIcloudSetupUrlForHost,
     normalizeBooleanMap,
     normalizeIcloudAliasList,

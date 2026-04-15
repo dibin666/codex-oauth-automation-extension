@@ -77,6 +77,19 @@
     },
     {
       "matches": [
+        "https://www.icloud.com/*",
+        "https://www.icloud.com.cn/*"
+      ],
+      "js": [
+        "content/activation-utils.js",
+        "content/utils.js",
+        "content/icloud-mail.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://duckduckgo.com/email/settings/autofill*"
       ],
       "js": [

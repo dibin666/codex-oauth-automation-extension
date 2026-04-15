@@ -202,6 +202,7 @@ const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 15;
 const AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES = 5;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
+const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
@@ -258,6 +259,13 @@ const normalizeLuckmailTimestampValue = window.LuckMailUtils?.normalizeTimestamp
 const HOTMAIL_LIST_EXPANDED_STORAGE_KEY = 'multipage-hotmail-list-expanded';
 const sidepanelUpdateService = window.SidepanelUpdateService;
 const DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME = window.LuckMailUtils?.DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME || '保留';
+const normalizeIcloudHost = window.IcloudUtils?.normalizeIcloudHost
+  || ((value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'icloud.com' || normalized === 'icloud.com.cn' ? normalized : '';
+  });
+const getIcloudLoginUrlForHost = window.IcloudUtils?.getIcloudLoginUrlForHost
+  || ((host) => host === 'icloud.com.cn' ? 'https://www.icloud.com.cn/' : (host === 'icloud.com' ? 'https://www.icloud.com/' : ''));
 
 let lastRenderedLuckmailPurchases = [];
 let luckmailSelectedPurchaseIds = new Set();
@@ -267,6 +275,10 @@ let luckmailRefreshQueued = false;
 
 btnAutoCancelSchedule?.remove();
 const MAIL_PROVIDER_LOGIN_CONFIGS = {
+  [ICLOUD_PROVIDER]: {
+    label: 'iCloud 邮箱',
+    buttonLabel: '登录',
+  },
   [GMAIL_PROVIDER]: {
     label: 'Gmail 邮箱',
     url: 'https://mail.google.com/mail/u/0/#inbox',
@@ -1468,7 +1480,7 @@ function applySettingsState(state) {
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
-    || ['hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
+    || [ICLOUD_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
     ? String(state?.mailProvider || '163').trim()
     : (String(state?.emailGenerator || '').trim().toLowerCase() === 'custom'
       || String(state?.emailGenerator || '').trim().toLowerCase() === 'manual'
@@ -1785,6 +1797,10 @@ function isCustomMailProvider(provider = selectMailProvider.value) {
 
 function isLuckmailProvider(provider = selectMailProvider.value) {
   return String(provider || '').trim().toLowerCase() === LUCKMAIL_PROVIDER;
+}
+
+function isIcloudMailProvider(provider = selectMailProvider.value) {
+  return String(provider || '').trim().toLowerCase() === ICLOUD_PROVIDER;
 }
 
 function normalizeLuckmailBaseUrl(value = '') {
@@ -2313,8 +2329,17 @@ function getMailProviderLoginConfig(provider = selectMailProvider.value) {
   return MAIL_PROVIDER_LOGIN_CONFIGS[String(provider || '').trim()] || null;
 }
 
+function getSelectedIcloudHostPreference() {
+  return normalizeIcloudHost(selectIcloudHostPreference?.value || latestState?.icloudHostPreference || '')
+    || normalizeIcloudHost(latestState?.preferredIcloudHost)
+    || 'icloud.com';
+}
+
 function getMailProviderLoginUrl(provider = selectMailProvider.value) {
   const config = getMailProviderLoginConfig(provider);
+  if (String(provider || '').trim() === ICLOUD_PROVIDER) {
+    return getIcloudLoginUrlForHost(getSelectedIcloudHostPreference());
+  }
   const url = String(config?.url || '').trim();
   return url ? url : '';
 }
@@ -2614,6 +2639,7 @@ function updateMailProviderUI() {
   const useHotmail = selectMailProvider.value === 'hotmail-api';
   const useLuckmail = isLuckmailProvider();
   const useCustomEmail = isCustomMailProvider();
+  const useIcloudProvider = isIcloudMailProvider();
   const useEmailGenerator = !useHotmail && !useLuckmail && !useGeneratedAlias && !useCustomEmail;
   const useCloudflareTempEmailProvider = selectMailProvider.value === 'cloudflare-temp-email';
   updateMailLoginButtonState();
@@ -2635,7 +2661,7 @@ function updateMailProviderUI() {
     rowEmailGenerator.style.display = useEmailGenerator ? '' : 'none';
   }
   if (icloudSection) {
-    const showIcloudSection = useEmailGenerator && useIcloud;
+    const showIcloudSection = (useEmailGenerator && useIcloud) || useIcloudProvider;
     icloudSection.style.display = showIcloudSection ? '' : 'none';
     if (showIcloudSection && !lastRenderedIcloudAliases.length) {
       queueIcloudAliasRefresh();
