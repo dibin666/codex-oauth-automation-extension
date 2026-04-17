@@ -523,9 +523,12 @@ async function fillSignupEmailAndContinue(email, step) {
   log(`步骤 ${step}：邮箱已准备提交，正在前往密码页...`);
   window.setTimeout(() => {
     try {
+      throwIfStopped();
       simulateClick(continueButton);
     } catch (error) {
-      console.error('[MultiPage:signup-page] deferred signup email submit failed:', error?.message || error);
+      if (!isStopError(error)) {
+        console.error('[MultiPage:signup-page] deferred signup email submit failed:', error?.message || error);
+      }
     }
   }, 120);
 
@@ -601,12 +604,15 @@ async function step3_fillEmailPassword(payload) {
   if (submitBtn) {
     window.setTimeout(async () => {
       try {
+        throwIfStopped();
         await sleep(500);
         await humanPause(500, 1300);
         simulateClick(submitBtn);
         log('步骤 3：表单已提交');
       } catch (error) {
-        console.error('[MultiPage:signup-page] deferred step 3 submit failed:', error?.message || error);
+        if (!isStopError(error)) {
+          console.error('[MultiPage:signup-page] deferred step 3 submit failed:', error?.message || error);
+        }
       }
     }, 120);
   }
@@ -2344,4 +2350,3 @@ async function step5_fillNameBirthday(payload) {
   log('步骤 5：已点击“完成帐户创建”，当前步骤直接完成，不再等待页面结果。');
   return completionPayload;
 }
-

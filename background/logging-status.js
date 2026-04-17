@@ -137,6 +137,7 @@
         autoRunCurrentRun: payload.currentRun ?? 0,
         autoRunTotalRuns: payload.totalRuns ?? 1,
         autoRunAttemptRun: payload.attemptRun ?? 0,
+        autoRunSessionId: Math.max(0, Math.floor(Number(payload.sessionId ?? payload.autoRunSessionId) || 0)),
         scheduledAutoRunAt: Number.isFinite(Number(payload.scheduledAt)) ? Number(payload.scheduledAt) : null,
         autoRunCountdownAt: Number.isFinite(Number(payload.countdownAt)) ? Number(payload.countdownAt) : null,
         autoRunCountdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),

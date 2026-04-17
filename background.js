@@ -308,6 +308,7 @@ const DEFAULT_STATE = {
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
   autoRunTotalRuns: 1, // 自动运行计划总轮数。
   autoRunAttemptRun: 0, // 当前轮次的重试序号。
+  autoRunSessionId: 0,
   autoRunRoundSummaries: [], // 自动运行轮次摘要。
   scheduledAutoRunAt: null, // 自动运行计划启动时间戳。
   autoRunTimerPlan: null, // 自动运行可恢复计时计划快照。
@@ -426,6 +427,48 @@ function normalizeAutoRunTimerKind(value = '') {
   return '';
 }
 
+function normalizeAutoRunSessionId(value) {
+  const numeric = Math.floor(Number(value) || 0);
+  return numeric > 0 ? numeric : 0;
+}
+
+function createAutoRunSessionId() {
+  autoRunSessionSeed = Math.max(autoRunSessionSeed + 1, Date.now());
+  autoRunSessionId = autoRunSessionSeed;
+  return autoRunSessionId;
+}
+
+function setCurrentAutoRunSessionId(value) {
+  autoRunSessionId = normalizeAutoRunSessionId(value);
+  return autoRunSessionId;
+}
+
+function clearCurrentAutoRunSessionId(expectedSessionId = null) {
+  if (expectedSessionId === null) {
+    autoRunSessionId = 0;
+    return autoRunSessionId;
+  }
+
+  const normalizedExpected = normalizeAutoRunSessionId(expectedSessionId);
+  if (!normalizedExpected || normalizedExpected === autoRunSessionId) {
+    autoRunSessionId = 0;
+  }
+  return autoRunSessionId;
+}
+
+function isCurrentAutoRunSessionId(value) {
+  const normalized = normalizeAutoRunSessionId(value);
+  return normalized > 0 && normalized === autoRunSessionId;
+}
+
+function throwIfAutoRunSessionStopped(sessionId) {
+  const normalizedSessionId = normalizeAutoRunSessionId(sessionId);
+  if (normalizedSessionId && !isCurrentAutoRunSessionId(normalizedSessionId)) {
+    throw new Error(STOP_ERROR_MESSAGE);
+  }
+  throwIfStopped();
+}
+
 function normalizeAutoRunTimerPlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
     return null;
@@ -449,6 +492,7 @@ function normalizeAutoRunTimerPlan(plan) {
     0,
     Math.min(AUTO_RUN_MAX_RETRIES_PER_ROUND + 1, Math.floor(Number(plan.attemptRun) || 0))
   );
+  const autoRunSessionId = normalizeAutoRunSessionId(plan.autoRunSessionId ?? plan.sessionId);
   const roundSummaries = serializeAutoRunRoundSummaries(totalRuns, plan.roundSummaries);
   const countdownTitle = String(plan.countdownTitle || '').trim();
   const countdownNote = String(plan.countdownNote || '').trim();
@@ -462,6 +506,7 @@ function normalizeAutoRunTimerPlan(plan) {
       mode,
       currentRun: 0,
       attemptRun: 0,
+      autoRunSessionId,
       roundSummaries: [],
       countdownTitle: countdownTitle || '已计划自动运行',
       countdownNote: countdownNote || `计划于 ${formatAutoRunScheduleTime(fireAt)} 开始`,
@@ -479,6 +524,7 @@ function normalizeAutoRunTimerPlan(plan) {
       mode: 'restart',
       currentRun: normalizedCurrentRun,
       attemptRun: normalizedAttemptRun,
+      autoRunSessionId,
       roundSummaries,
       countdownTitle: countdownTitle || '线程间隔中',
       countdownNote: countdownNote || `第 ${Math.min(normalizedCurrentRun + 1, totalRuns)}/${totalRuns} 轮即将开始`,
@@ -495,6 +541,7 @@ function normalizeAutoRunTimerPlan(plan) {
     mode: 'restart',
     currentRun: normalizedCurrentRun,
     attemptRun: normalizedAttemptRun,
+    autoRunSessionId,
     roundSummaries,
     countdownTitle: countdownTitle || '线程间隔中',
     countdownNote: countdownNote || `第 ${normalizedCurrentRun}/${totalRuns} 轮第 ${normalizedAttemptRun} 次尝试即将开始`,
@@ -521,6 +568,7 @@ function normalizeAutoRunTimerPlanFromState(state = {}) {
     fireAt: legacyScheduledAt,
     totalRuns: state.scheduledAutoRunPlan?.totalRuns ?? state.autoRunTotalRuns,
     autoRunSkipFailures: state.scheduledAutoRunPlan?.autoRunSkipFailures ?? state.autoRunSkipFailures,
+    autoRunSessionId: state.autoRunSessionId,
     mode: state.scheduledAutoRunPlan?.mode,
   });
 }
@@ -541,6 +589,7 @@ function getAutoRunTimerStatusPayload(plan) {
     currentRun: normalizedPlan.currentRun,
     totalRuns: normalizedPlan.totalRuns,
     attemptRun: normalizedPlan.attemptRun,
+    sessionId: normalizedPlan.autoRunSessionId,
     scheduledAt: phase === 'scheduled' ? normalizedPlan.fireAt : null,
     countdownAt: normalizedPlan.fireAt,
     countdownTitle: normalizedPlan.countdownTitle,
@@ -3794,6 +3843,7 @@ const tabRuntime = self.MultiPageBackgroundTabRuntime?.createTabRuntime({
   LOG_PREFIX,
   matchesSourceUrlFamily,
   setState,
+  sleepWithStop,
   STOP_ERROR_MESSAGE,
   throwIfStopped,
 });
@@ -3978,6 +4028,7 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     currentRun: payload.currentRun ?? autoRunCurrentRun,
     totalRuns: payload.totalRuns ?? autoRunTotalRuns,
     attemptRun: payload.attemptRun ?? autoRunAttemptRun,
+    sessionId: payload.sessionId ?? payload.autoRunSessionId ?? autoRunSessionId,
   };
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.getAutoRunStatusPayload) {
     return loggingStatus.getAutoRunStatusPayload(phase, normalizedPayload);
@@ -3993,6 +4044,7 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     autoRunCurrentRun: normalizedPayload.currentRun ?? 0,
     autoRunTotalRuns: normalizedPayload.totalRuns ?? 1,
     autoRunAttemptRun: normalizedPayload.attemptRun ?? 0,
+    autoRunSessionId: normalizeAutoRunSessionId(normalizedPayload.sessionId),
     scheduledAutoRunAt: Number.isFinite(Number(normalizedPayload.scheduledAt)) ? Number(normalizedPayload.scheduledAt) : null,
     autoRunCountdownAt: Number.isFinite(Number(normalizedPayload.countdownAt)) ? Number(normalizedPayload.countdownAt) : null,
     autoRunCountdownTitle: normalizedPayload.countdownTitle === undefined ? '' : String(normalizedPayload.countdownTitle || ''),
@@ -4010,6 +4062,7 @@ async function broadcastAutoRunStatus(phase, payload = {}, extraState = {}) {
     currentRun: payload.currentRun ?? autoRunCurrentRun,
     totalRuns: payload.totalRuns ?? autoRunTotalRuns,
     attemptRun: payload.attemptRun ?? autoRunAttemptRun,
+    sessionId: payload.sessionId ?? payload.autoRunSessionId ?? autoRunSessionId,
     scheduledAt: rawScheduledAt === null ? null : Number(rawScheduledAt),
     countdownAt: rawCountdownAt === null ? null : Number(rawCountdownAt),
     countdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),
@@ -4119,6 +4172,7 @@ function getAutoRunTimerResumeOptions(plan) {
   if (normalizedPlan.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START) {
     return {
       loopOptions: {
+        autoRunSessionId: normalizedPlan.autoRunSessionId,
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
         mode: normalizedPlan.mode,
       },
@@ -4126,6 +4180,7 @@ function getAutoRunTimerResumeOptions(plan) {
         currentRun: 0,
         totalRuns: normalizedPlan.totalRuns,
         attemptRun: 0,
+        sessionId: normalizedPlan.autoRunSessionId,
       },
     };
   }
@@ -4134,6 +4189,7 @@ function getAutoRunTimerResumeOptions(plan) {
     const nextRun = Math.min(normalizedPlan.currentRun + 1, normalizedPlan.totalRuns);
     return {
       loopOptions: {
+        autoRunSessionId: normalizedPlan.autoRunSessionId,
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
         mode: 'restart',
         resumeCurrentRun: nextRun,
@@ -4144,12 +4200,14 @@ function getAutoRunTimerResumeOptions(plan) {
         currentRun: nextRun,
         totalRuns: normalizedPlan.totalRuns,
         attemptRun: 1,
+        sessionId: normalizedPlan.autoRunSessionId,
       },
     };
   }
 
   return {
     loopOptions: {
+      autoRunSessionId: normalizedPlan.autoRunSessionId,
       autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
       mode: 'restart',
       resumeCurrentRun: normalizedPlan.currentRun,
@@ -4160,6 +4218,7 @@ function getAutoRunTimerResumeOptions(plan) {
       currentRun: normalizedPlan.currentRun,
       totalRuns: normalizedPlan.totalRuns,
       attemptRun: normalizedPlan.attemptRun,
+      sessionId: normalizedPlan.autoRunSessionId,
     },
   };
 }
@@ -4185,6 +4244,9 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
     if (autoRunActive) {
       return false;
     }
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
 
     const resumeOptions = getAutoRunTimerResumeOptions(plan);
     if (!resumeOptions) {
@@ -4202,9 +4264,13 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
     }
 
     await clearAutoRunTimerAlarm();
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
     autoRunCurrentRun = resumeOptions.statusPayload.currentRun;
     autoRunTotalRuns = plan.totalRuns;
     autoRunAttemptRun = resumeOptions.statusPayload.attemptRun;
+    autoRunSessionId = normalizeAutoRunSessionId(plan.autoRunSessionId);
     if (plan.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && trigger !== 'manual' && state.autoRunDelayEnabled) {
       await setAutoRunDelayEnabledState(false);
     }
@@ -4219,6 +4285,9 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
       }
     );
 
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
     clearStopRequest();
     let logMessage = '倒计时结束，自动运行开始执行。';
     if (plan.kind === AUTO_RUN_TIMER_KIND_BETWEEN_ROUNDS) {
@@ -4233,6 +4302,9 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
       logMessage = '已手动跳过倒计时，自动运行立即开始。';
     }
     await addLog(logMessage, 'info');
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
 
     startAutoRunLoop(plan.totalRuns, resumeOptions.loopOptions);
     return true;
@@ -4251,17 +4323,20 @@ async function scheduleAutoRun(totalRuns, options = {}) {
   }
 
   const delayMinutes = normalizeAutoRunDelayMinutes(options.delayMinutes);
+  const sessionId = createAutoRunSessionId();
   const timerPlan = normalizeAutoRunTimerPlan({
     kind: AUTO_RUN_TIMER_KIND_SCHEDULED_START,
     fireAt: Date.now() + delayMinutes * 60 * 1000,
     totalRuns,
     autoRunSkipFailures: options.autoRunSkipFailures,
+    autoRunSessionId: sessionId,
     mode: options.mode,
   });
 
   autoRunCurrentRun = 0;
   autoRunTotalRuns = timerPlan.totalRuns;
   autoRunAttemptRun = 0;
+  autoRunSessionId = sessionId;
 
   await persistAutoRunTimerPlan(timerPlan, {
     autoRunSkipFailures: timerPlan.autoRunSkipFailures,
@@ -4284,14 +4359,17 @@ async function cancelScheduledAutoRun(options = {}) {
   autoRunCurrentRun = 0;
   autoRunTotalRuns = plan.totalRuns;
   autoRunAttemptRun = 0;
+  clearCurrentAutoRunSessionId(plan.autoRunSessionId);
   await broadcastAutoRunStatus(
     'idle',
     {
       currentRun: 0,
       totalRuns: plan.totalRuns,
       attemptRun: 0,
+      sessionId: 0,
     },
     {
+      autoRunSessionId: 0,
       autoRunRoundSummaries: [],
       autoRunTimerPlan: null,
       scheduledAutoRunPlan: null,
@@ -4306,21 +4384,37 @@ async function cancelScheduledAutoRun(options = {}) {
 
 async function restoreAutoRunTimerIfNeeded() {
   const state = await getState();
-  const plan = getPendingAutoRunTimerPlan(state);
+  let plan = getPendingAutoRunTimerPlan(state);
   if (!plan) {
+    clearCurrentAutoRunSessionId();
     if (state.autoRunPhase === 'scheduled' || state.autoRunPhase === 'waiting_interval') {
       await clearAutoRunTimerAlarm();
       await broadcastAutoRunStatus('idle', {
         currentRun: 0,
         totalRuns: 1,
         attemptRun: 0,
+        sessionId: 0,
       }, {
+        autoRunSessionId: 0,
         autoRunRoundSummaries: [],
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
       });
     }
     return;
+  }
+
+  if (!plan.autoRunSessionId) {
+    const restoredSessionId = createAutoRunSessionId();
+    plan = await persistAutoRunTimerPlan({
+      ...plan,
+      autoRunSessionId: restoredSessionId,
+    }, {
+      autoRunSkipFailures: plan.autoRunSkipFailures,
+      autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
+    });
+  } else {
+    setCurrentAutoRunSessionId(plan.autoRunSessionId);
   }
 
   if (plan.fireAt <= Date.now()) {
@@ -4333,6 +4427,7 @@ async function restoreAutoRunTimerIfNeeded() {
     statusPayload.phase,
     statusPayload,
     {
+      autoRunSessionId: plan.autoRunSessionId,
       autoRunSkipFailures: plan.autoRunSkipFailures,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
       autoRunTimerPlan: plan,
@@ -4809,6 +4904,7 @@ async function requestStop(options = {}) {
     autoRunCurrentRun = timerPlan.currentRun;
     autoRunTotalRuns = timerPlan.totalRuns;
     autoRunAttemptRun = timerPlan.attemptRun;
+    clearCurrentAutoRunSessionId(timerPlan.autoRunSessionId);
     if (options.logMessage !== false) {
       await addLog(options.logMessage || '已停止等待中的自动流程。', 'warn');
     }
@@ -4816,7 +4912,9 @@ async function requestStop(options = {}) {
       currentRun: timerPlan.currentRun,
       totalRuns: timerPlan.totalRuns,
       attemptRun: timerPlan.attemptRun,
+      sessionId: 0,
     }, {
+      autoRunSessionId: 0,
       autoRunSkipFailures: timerPlan.autoRunSkipFailures,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(timerPlan.totalRuns, timerPlan.roundSummaries),
       autoRunTimerPlan: null,
@@ -4830,6 +4928,7 @@ async function requestStop(options = {}) {
   if (stopRequested) return;
 
   stopRequested = true;
+  clearCurrentAutoRunSessionId();
   cancelPendingCommands();
   cleanupStep8NavigationListeners();
   rejectPendingStep8(new Error(STOP_ERROR_MESSAGE));
@@ -4853,7 +4952,9 @@ async function requestStop(options = {}) {
     currentRun: autoRunCurrentRun,
     totalRuns: autoRunTotalRuns,
     attemptRun: autoRunAttemptRun,
+    sessionId: 0,
   }, {
+    autoRunSessionId: 0,
     autoRunTimerPlan: null,
     scheduledAutoRunPlan: null,
   });
@@ -5017,6 +5118,8 @@ let autoRunActive = false;
 let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
+let autoRunSessionId = 0;
+let autoRunSessionSeed = 0;
 const EMAIL_FETCH_MAX_ATTEMPTS = 5;
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS = 25000;
@@ -5088,6 +5191,7 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   broadcastStopToContentScripts,
   cancelPendingCommands,
   clearStopRequest: () => clearStopRequest(),
+  createAutoRunSessionId: () => createAutoRunSessionId(),
   getAutoRunStatusPayload,
   getErrorMessage,
   getFirstUnfinishedStep,
@@ -5109,16 +5213,19 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
       autoRunCurrentRun,
       autoRunTotalRuns,
       autoRunAttemptRun,
+      autoRunSessionId,
     }),
     set: (updates = {}) => {
       if (updates.autoRunActive !== undefined) autoRunActive = Boolean(updates.autoRunActive);
       if (updates.autoRunCurrentRun !== undefined) autoRunCurrentRun = Number(updates.autoRunCurrentRun) || 0;
       if (updates.autoRunTotalRuns !== undefined) autoRunTotalRuns = Number(updates.autoRunTotalRuns) || 0;
       if (updates.autoRunAttemptRun !== undefined) autoRunAttemptRun = Number(updates.autoRunAttemptRun) || 0;
+      if (updates.autoRunSessionId !== undefined) autoRunSessionId = normalizeAutoRunSessionId(updates.autoRunSessionId);
     },
   },
   setState,
   sleepWithStop,
+  throwIfAutoRunSessionStopped: (sessionId) => throwIfAutoRunSessionStopped(sessionId),
   waitForRunningStepsToFinish,
   throwIfStopped: () => throwIfStopped(),
   chrome,
@@ -5558,6 +5665,7 @@ async function resumeAutoRun() {
 
   await addLog('检测到自动流程暂停上下文已丢失，正在从当前进度恢复自动运行...', 'warn');
   startAutoRunLoop(totalRuns, {
+    autoRunSessionId: normalizeAutoRunSessionId(state.autoRunSessionId),
     autoRunSkipFailures: Boolean(state.autoRunSkipFailures),
     mode: 'continue',
     resumeCurrentRun: currentRun,
