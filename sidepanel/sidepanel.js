@@ -99,6 +99,7 @@ const selectTempEmailDomain = document.getElementById('select-temp-email-domain'
 const inputTempEmailDomain = document.getElementById('input-temp-email-domain');
 const btnTempEmailDomainMode = document.getElementById('btn-temp-email-domain-mode');
 const hotmailSection = document.getElementById('hotmail-section');
+const e5Section = document.getElementById('e5-section');
 const luckmailSection = document.getElementById('luckmail-section');
 const icloudSection = document.getElementById('icloud-section');
 const icloudSummary = document.getElementById('icloud-summary');
@@ -139,6 +140,16 @@ const btnDeleteAllHotmailAccounts = document.getElementById('btn-delete-all-hotm
 const btnToggleHotmailList = document.getElementById('btn-toggle-hotmail-list');
 const hotmailListShell = document.getElementById('hotmail-list-shell');
 const hotmailAccountsList = document.getElementById('hotmail-accounts-list');
+const selectE5InboxMode = document.getElementById('select-e5-inbox-mode');
+const inputE5Email = document.getElementById('input-e5-email');
+const inputE5Import = document.getElementById('input-e5-import');
+const btnAddE5Account = document.getElementById('btn-add-e5-account');
+const btnImportE5Accounts = document.getElementById('btn-import-e5-accounts');
+const btnClearRegisteredE5Accounts = document.getElementById('btn-clear-registered-e5-accounts');
+const btnDeleteAllE5Accounts = document.getElementById('btn-delete-all-e5-accounts');
+const btnToggleE5List = document.getElementById('btn-toggle-e5-list');
+const e5ListShell = document.getElementById('e5-list-shell');
+const e5AccountsList = document.getElementById('e5-accounts-list');
 const inputLuckmailApiKey = document.getElementById('input-luckmail-api-key');
 const inputLuckmailBaseUrl = document.getElementById('input-luckmail-base-url');
 const selectLuckmailEmailType = document.getElementById('select-luckmail-email-type');
@@ -218,6 +229,10 @@ const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 15;
 const AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES = 5;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
+const E5_PROVIDER = 'e5-pool';
+const E5_INBOX_MODE_OUTLOOK = 'outlook';
+const E5_INBOX_MODE_GMAIL = 'gmail';
+const DEFAULT_E5_INBOX_URL = 'https://outlook.cloud.microsoft/';
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
@@ -401,6 +416,10 @@ let currentReleaseSnapshot = null;
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
 const COPY_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const normalizeE5InboxMode = window.E5Utils?.normalizeE5InboxMode
+  || ((value) => String(value || '').trim().toLowerCase() === E5_INBOX_MODE_GMAIL ? E5_INBOX_MODE_GMAIL : E5_INBOX_MODE_OUTLOOK);
+const parseE5ImportText = window.E5Utils?.parseE5ImportText;
+const upsertE5AccountInList = window.E5Utils?.upsertE5AccountInList;
 const parseHotmailImportText = window.HotmailUtils?.parseHotmailImportText;
 const normalizeHotmailServiceModeFromUtils = window.HotmailUtils?.normalizeHotmailServiceMode;
 const shouldClearHotmailCurrentSelection = window.HotmailUtils?.shouldClearHotmailCurrentSelection;
@@ -425,6 +444,10 @@ const getIcloudLoginUrlForHost = window.IcloudUtils?.getIcloudLoginUrlForHost
 
 btnAutoCancelSchedule?.remove();
 const MAIL_PROVIDER_LOGIN_CONFIGS = {
+  [E5_PROVIDER]: {
+    label: 'E5 Outlook 邮箱',
+    buttonLabel: '打开邮箱',
+  },
   [ICLOUD_PROVIDER]: {
     label: 'iCloud 邮箱',
     buttonLabel: '登录',
@@ -1331,6 +1354,7 @@ function collectSettingsPayload() {
     sub2apiDefaultProxyName: inputSub2ApiDefaultProxy.value.trim(),
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
+    e5InboxMode: getSelectedE5InboxMode(),
     mail2925Mode: getSelectedMail2925Mode(),
     emailGenerator: selectEmailGenerator.value,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
@@ -1701,13 +1725,16 @@ function applySettingsState(state) {
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
   inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
-    || [ICLOUD_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
+    || [E5_PROVIDER, ICLOUD_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
     ? String(state?.mailProvider || '163').trim()
     : (String(state?.emailGenerator || '').trim().toLowerCase() === 'custom'
       || String(state?.emailGenerator || '').trim().toLowerCase() === 'manual'
       ? 'custom'
       : '163');
   selectMailProvider.value = restoredMailProvider;
+  if (selectE5InboxMode) {
+    selectE5InboxMode.value = normalizeE5InboxMode(state?.e5InboxMode);
+  }
   setMail2925Mode(state?.mail2925Mode);
   {
     const restoredEmailGenerator = String(state?.emailGenerator || '').trim().toLowerCase();
@@ -2189,6 +2216,19 @@ function getHotmailAccounts(state = latestState) {
   return Array.isArray(state?.hotmailAccounts) ? state.hotmailAccounts : [];
 }
 
+function getE5Accounts(state = latestState) {
+  return Array.isArray(state?.e5Accounts) ? state.e5Accounts : [];
+}
+
+function getCurrentE5Account(state = latestState) {
+  const currentId = state?.currentE5AccountId;
+  return getE5Accounts(state).find((account) => account.id === currentId) || null;
+}
+
+function getCurrentE5Email(state = latestState) {
+  return String(getCurrentE5Account(state)?.email || '').trim();
+}
+
 function getCurrentHotmailAccount(state = latestState) {
   const currentId = state?.currentHotmailAccountId;
   return getHotmailAccounts(state).find((account) => account.id === currentId) || null;
@@ -2241,8 +2281,22 @@ function formatLuckmailDateTime(value) {
   });
 }
 
+function getSelectedE5InboxMode() {
+  return normalizeE5InboxMode(selectE5InboxMode?.value || latestState?.e5InboxMode || '');
+}
+
 function getMailProviderLoginConfig(provider = selectMailProvider.value) {
-  return MAIL_PROVIDER_LOGIN_CONFIGS[String(provider || '').trim()] || null;
+  const e5Provider = typeof E5_PROVIDER !== 'undefined' ? E5_PROVIDER : 'e5-pool';
+  const e5InboxModeGmail = typeof E5_INBOX_MODE_GMAIL !== 'undefined' ? E5_INBOX_MODE_GMAIL : 'gmail';
+  const normalizedProvider = String(provider || '').trim();
+  if (normalizedProvider === e5Provider) {
+    const useGmailInbox = getSelectedE5InboxMode() === e5InboxModeGmail;
+    return {
+      label: useGmailInbox ? 'Gmail 转发邮箱' : 'E5 Outlook 邮箱',
+      buttonLabel: '打开邮箱',
+    };
+  }
+  return MAIL_PROVIDER_LOGIN_CONFIGS[normalizedProvider] || null;
 }
 
 function getSelectedIcloudHostPreference() {
@@ -2252,6 +2306,14 @@ function getSelectedIcloudHostPreference() {
 }
 
 function getMailProviderLoginUrl(provider = selectMailProvider.value) {
+  const e5Provider = typeof E5_PROVIDER !== 'undefined' ? E5_PROVIDER : 'e5-pool';
+  const e5InboxModeGmail = typeof E5_INBOX_MODE_GMAIL !== 'undefined' ? E5_INBOX_MODE_GMAIL : 'gmail';
+  const e5InboxUrl = typeof DEFAULT_E5_INBOX_URL !== 'undefined' ? DEFAULT_E5_INBOX_URL : 'https://outlook.cloud.microsoft/';
+  if (String(provider || '').trim() === e5Provider) {
+    return getSelectedE5InboxMode() === e5InboxModeGmail
+      ? 'https://mail.google.com/mail/u/0/#inbox'
+      : e5InboxUrl;
+  }
   const config = getMailProviderLoginConfig(provider);
   if (String(provider || '').trim() === ICLOUD_PROVIDER) {
     return getIcloudLoginUrlForHost(getSelectedIcloudHostPreference());
@@ -2269,6 +2331,17 @@ function isCurrentEmailManagedByHotmail(state = latestState) {
   const inputEmailValue = String(inputEmail.value || '').trim();
   const stateEmailValue = String(state?.email || '').trim();
   return inputEmailValue === hotmailEmail || stateEmailValue === hotmailEmail;
+}
+
+function isCurrentEmailManagedByE5(state = latestState) {
+  const e5Email = getCurrentE5Email(state);
+  if (!e5Email) {
+    return false;
+  }
+
+  const inputEmailValue = String(inputEmail.value || '').trim();
+  const stateEmailValue = String(state?.email || '').trim();
+  return inputEmailValue === e5Email || stateEmailValue === e5Email;
 }
 
 function isCurrentEmailManagedByLuckmail(state = latestState) {
@@ -2340,12 +2413,14 @@ function updateMailProviderUI() {
   const mail2925Mode = getSelectedMail2925Mode();
   const useGeneratedAlias = usesGeneratedAliasMailProvider(selectMailProvider.value, mail2925Mode);
   const useInbucket = selectMailProvider.value === 'inbucket';
+  const useE5 = selectMailProvider.value === E5_PROVIDER;
   const useHotmail = selectMailProvider.value === 'hotmail-api';
   const useLuckmail = isLuckmailProvider();
   const useCustomEmail = isCustomMailProvider();
   const useIcloudProvider = isIcloudMailProvider();
-  const useEmailGenerator = !useHotmail && !useLuckmail && !useGeneratedAlias && !useCustomEmail;
+  const useEmailGenerator = !useE5 && !useHotmail && !useLuckmail && !useGeneratedAlias && !useCustomEmail;
   const useCloudflareTempEmailProvider = selectMailProvider.value === 'cloudflare-temp-email';
+  const useE5GmailInbox = useE5 && getSelectedE5InboxMode() === E5_INBOX_MODE_GMAIL;
   const aliasUiCopy = useGeneratedAlias ? getManagedAliasProviderUiCopy(selectMailProvider.value) : null;
   const uiCopy = getCurrentRegistrationEmailUiCopy();
   updateMailLoginButtonState();
@@ -2396,6 +2471,9 @@ function updateMailProviderUI() {
     setCloudflareTempEmailDomainEditMode(false, { clearInput: false });
   }
 
+  if (e5Section) {
+    e5Section.style.display = useE5 ? '' : 'none';
+  }
   if (hotmailSection) {
     hotmailSection.style.display = useHotmail ? '' : 'none';
   }
@@ -2404,7 +2482,7 @@ function updateMailProviderUI() {
   }
   labelEmailPrefix.textContent = '邮箱前缀';
   inputEmailPrefix.placeholder = '例如 abc';
-  selectEmailGenerator.disabled = useHotmail || useLuckmail || useGeneratedAlias || useCustomEmail;
+  selectEmailGenerator.disabled = useE5 || useHotmail || useLuckmail || useGeneratedAlias || useCustomEmail;
   if (useGmail) {
     labelEmailPrefix.textContent = 'Gmail 原邮箱';
     inputEmailPrefix.placeholder = '例如 yourname@gmail.com';
@@ -2420,31 +2498,37 @@ function updateMailProviderUI() {
   if (rowHotmailLocalBaseUrl) {
     rowHotmailLocalBaseUrl.style.display = useHotmail && hotmailServiceMode === HOTMAIL_SERVICE_MODE_LOCAL ? '' : 'none';
   }
-  btnFetchEmail.hidden = useHotmail || useLuckmail || useCustomEmail;
-  inputEmail.readOnly = useHotmail || useLuckmail;
-  inputEmail.placeholder = useHotmail
-    ? '由 Hotmail 账号池自动分配'
+  btnFetchEmail.hidden = useE5 || useHotmail || useLuckmail || useCustomEmail;
+  inputEmail.readOnly = useE5 || useHotmail || useLuckmail;
+  inputEmail.placeholder = useE5
+    ? '由 E5 账号池自动分配'
+    : (useHotmail
+      ? '由 Hotmail 账号池自动分配'
     : (useLuckmail
       ? '步骤 3 自动购买 LuckMail 邮箱并回填'
-      : (useGeneratedAlias ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder));
+      : (useGeneratedAlias ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder)));
   if (useGmail && useGeneratedAlias) {
     inputEmail.placeholder = '步骤 3 自动生成 Gmail +tag 邮箱并回填';
   }
-  if (!useHotmail && !useLuckmail) {
+  if (!useE5 && !useHotmail && !useLuckmail) {
     inputEmail.placeholder = uiCopy.placeholder;
   }
-  btnFetchEmail.disabled = useLuckmail || useCustomEmail || isAutoRunLockedPhase();
+  btnFetchEmail.disabled = useE5 || useLuckmail || useCustomEmail || isAutoRunLockedPhase();
   if (!btnFetchEmail.disabled) {
     btnFetchEmail.textContent = uiCopy.buttonLabel;
   }
   if (autoHintText) {
-    autoHintText.textContent = useHotmail
-      ? '请先校验并选择一个 Hotmail 账号'
+    autoHintText.textContent = useE5
+      ? (useE5GmailInbox
+        ? '请先导入并选择一个 E5 账号；验证码会去 Gmail 转发邮箱自动轮询。'
+        : `请先导入并选择一个 E5 账号；步骤 4 / 8 会默认打开 ${DEFAULT_E5_INBOX_URL} 自动提取验证码，30 秒未收到会自动重发。`)
+      : (useHotmail
+        ? '请先校验并选择一个 Hotmail 账号'
       : (useLuckmail
         ? '步骤 3 会自动购买 LuckMail 邮箱并用于收码'
       : (useGeneratedAlias
         ? '步骤 3 会自动生成邮箱，无需手动获取'
-        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`)));
+        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`))));
   }
   if (autoHintText && useGmail && useGeneratedAlias) {
     autoHintText.textContent = '请先填写 Gmail 原邮箱，步骤 3 会自动生成 Gmail +tag 地址';
@@ -2455,11 +2539,14 @@ function updateMailProviderUI() {
   if (autoHintText && showCloudflareTempEmailReceiveMailbox) {
     autoHintText.textContent = '若注册邮箱会转发到 Cloudflare Temp Email，请在“邮件接收”中填写实际接收转发邮件的邮箱。';
   }
-  if (useHotmail) {
+  if (useE5) {
+    inputEmail.value = getCurrentE5Email();
+  } else if (useHotmail) {
     inputEmail.value = getCurrentHotmailEmail();
   } else if (useLuckmail) {
     inputEmail.value = getCurrentLuckmailEmail();
   }
+  renderE5Accounts();
   renderHotmailAccounts();
   if (useLuckmail) {
     renderLuckmailPurchases();
@@ -2820,6 +2907,53 @@ async function copyTextToClipboard(text) {
   }
   await navigator.clipboard.writeText(value);
 }
+
+const e5Manager = window.SidepanelE5Manager?.createE5Manager({
+  state: {
+    getLatestState: () => latestState,
+    syncLatestState,
+  },
+  dom: {
+    btnAddE5Account,
+    btnClearRegisteredE5Accounts,
+    btnDeleteAllE5Accounts,
+    btnImportE5Accounts,
+    btnToggleE5List,
+    e5AccountsList,
+    e5ListShell,
+    inputE5Email,
+    inputE5Import,
+    inputEmail,
+    selectMailProvider,
+  },
+  helpers: {
+    copyTextToClipboard,
+    escapeHtml,
+    getCurrentE5Email,
+    getE5Accounts,
+    openConfirmModal,
+    showToast,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  constants: {
+    copyIcon: COPY_ICON,
+    displayTimeZone: DISPLAY_TIMEZONE,
+    expandedStorageKey: 'multipage-e5-list-expanded',
+  },
+  e5Utils: {
+    parseE5ImportText,
+    upsertE5AccountInList,
+  },
+});
+const initE5ListExpandedState = e5Manager?.initE5ListExpandedState
+  || (() => { });
+const renderE5Accounts = e5Manager?.renderE5Accounts
+  || (() => { });
+const bindE5Events = e5Manager?.bindE5Events
+  || (() => { });
+bindE5Events();
 
 const hotmailManager = window.SidepanelHotmailManager?.createHotmailManager({
   state: {
@@ -3189,7 +3323,7 @@ stepsList?.addEventListener('click', async (event) => {
         syncLatestState({ customPassword: inputPassword.value });
       }
       let email = inputEmail.value.trim();
-      if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
+      if (selectMailProvider.value === E5_PROVIDER || selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
         const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
         if (response?.error) {
           throw new Error(response.error);
@@ -3238,7 +3372,7 @@ stepsList?.addEventListener('click', async (event) => {
 });
 
 btnFetchEmail.addEventListener('click', async () => {
-  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isCustomMailProvider()) {
+  if (selectMailProvider.value === E5_PROVIDER || selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isCustomMailProvider()) {
     return;
   }
   await fetchGeneratedEmail().catch(() => { });
@@ -3489,6 +3623,7 @@ btnReset.addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
   syncLatestState({
     stepStatuses: STEP_DEFAULT_STATUSES,
+    currentE5AccountId: null,
     currentHotmailAccountId: null,
     currentLuckmailPurchase: null,
     currentLuckmailMailCursor: null,
@@ -3522,6 +3657,7 @@ btnReset.addEventListener('click', async () => {
   updateStopButtonState(false);
   updateButtonStates();
   updateProgressCounter();
+  renderE5Accounts();
   renderHotmailAccounts();
   resetLuckmailManager();
   if (isLuckmailProvider()) {
@@ -3536,7 +3672,7 @@ btnClearLog.addEventListener('click', () => {
 
 // Save settings on change
 inputEmail.addEventListener('change', async () => {
-  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
+  if (selectMailProvider.value === E5_PROVIDER || selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
     return;
   }
   const email = inputEmail.value.trim();
@@ -3615,6 +3751,9 @@ selectMailProvider.addEventListener('change', async () => {
   syncManagedAliasBaseEmailDraftFromInput(previousProvider);
   setManagedAliasBaseEmailInputForProvider(nextProvider, latestState);
   updateMailProviderUI();
+  const leavingE5 = previousProvider === E5_PROVIDER
+    && nextProvider !== E5_PROVIDER
+    && isCurrentEmailManagedByE5();
   const leavingHotmail = previousProvider === 'hotmail-api'
     && nextProvider !== 'hotmail-api'
     && isCurrentEmailManagedByHotmail();
@@ -3626,12 +3765,18 @@ selectMailProvider.addEventListener('change', async () => {
     || (previousProvider === '2925' && normalizeMail2925Mode(previousMail2925Mode) !== getSelectedMail2925Mode())
   ) && usesGeneratedAliasMailProvider(previousProvider, previousMail2925Mode)
     && isCurrentEmailManagedByGeneratedAlias(previousProvider, latestState, previousMail2925Mode);
-  if (leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
+  if (leavingE5 || leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
     await clearRegistrationEmail({ silent: true }).catch(() => { });
   }
   if (nextProvider === LUCKMAIL_PROVIDER) {
     queueLuckmailPurchaseRefresh();
   }
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+selectE5InboxMode?.addEventListener('change', () => {
+  updateMailProviderUI();
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
@@ -4101,6 +4246,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.cloudflareTempEmailDomain !== undefined || message.payload.cloudflareTempEmailDomains !== undefined) {
         renderCloudflareTempEmailDomainOptions(message.payload.cloudflareTempEmailDomain || latestState?.cloudflareTempEmailDomain || '');
       }
+      if (message.payload.e5InboxMode !== undefined && selectE5InboxMode) {
+        selectE5InboxMode.value = normalizeE5InboxMode(message.payload.e5InboxMode);
+        updateMailProviderUI();
+      }
+      if (message.payload.currentE5AccountId !== undefined || message.payload.e5Accounts !== undefined) {
+        renderE5Accounts();
+        if (selectMailProvider.value === E5_PROVIDER) {
+          inputEmail.value = getCurrentE5Email();
+        }
+      }
       if (message.payload.currentHotmailAccountId !== undefined || message.payload.hotmailAccounts !== undefined) {
         renderHotmailAccounts();
         if (selectMailProvider.value === 'hotmail-api') {
@@ -4265,6 +4420,7 @@ document.addEventListener('keydown', (event) => {
 
 initializeManualStepActions();
 initTheme();
+initE5ListExpandedState();
 initHotmailListExpandedState();
 updateSaveButtonState();
 updateConfigMenuControls();

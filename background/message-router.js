@@ -19,6 +19,8 @@
       clearStopRequest,
       closeLocalhostCallbackTabs,
       closeTabsByUrlPrefix,
+      deleteE5Account,
+      deleteE5Accounts,
       deleteHotmailAccount,
       deleteHotmailAccounts,
       deleteIcloudAlias,
@@ -30,6 +32,7 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      finalizeE5AccountAfterSuccessfulFlow,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
       findHotmailAccount,
@@ -64,6 +67,7 @@
       resumeAutoRun,
       scheduleAutoRun,
       selectLuckmailPurchase,
+      setCurrentE5Account,
       setCurrentHotmailAccount,
       setEmailState,
       setEmailStateSilently,
@@ -78,8 +82,11 @@
       skipAutoRunCountdown,
       skipStep,
       startAutoRunLoop,
+      importE5Accounts,
+      patchE5Account,
       syncHotmailAccounts,
       testHotmailAccountMailAccess,
+      upsertE5Account,
       upsertHotmailAccount,
       verifyHotmailAccount,
     } = deps;
@@ -174,6 +181,9 @@
               lastUsedAt: Date.now(),
             });
             await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
+          }
+          if (typeof finalizeE5AccountAfterSuccessfulFlow === 'function') {
+            await finalizeE5AccountAfterSuccessfulFlow(latestState);
           }
           if (isLuckmailProvider(latestState)) {
             const currentPurchase = getCurrentLuckmailPurchase(latestState);
@@ -434,6 +444,42 @@
 
         case 'UPSERT_HOTMAIL_ACCOUNT': {
           const account = await upsertHotmailAccount(message.payload || {});
+          return { ok: true, account };
+        }
+
+        case 'UPSERT_E5_ACCOUNT': {
+          const account = await upsertE5Account(message.payload || {});
+          return { ok: true, account };
+        }
+
+        case 'IMPORT_E5_ACCOUNTS': {
+          const result = await importE5Accounts(message.payload?.accounts || []);
+          return { ok: true, ...result };
+        }
+
+        case 'DELETE_E5_ACCOUNT': {
+          await deleteE5Account(String(message.payload?.accountId || ''));
+          return { ok: true };
+        }
+
+        case 'DELETE_E5_ACCOUNTS': {
+          const result = await deleteE5Accounts(String(message.payload?.mode || 'all'));
+          return { ok: true, ...result };
+        }
+
+        case 'SELECT_E5_ACCOUNT': {
+          const account = await setCurrentE5Account(String(message.payload?.accountId || ''), {
+            markSelected: false,
+            syncEmail: true,
+          });
+          return { ok: true, account };
+        }
+
+        case 'PATCH_E5_ACCOUNT': {
+          const account = await patchE5Account(
+            String(message.payload?.accountId || ''),
+            message.payload?.updates || {}
+          );
           return { ok: true, account };
         }
 

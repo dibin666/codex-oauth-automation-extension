@@ -106,6 +106,13 @@
           return is163MailHost(candidate.hostname);
         case 'gmail-mail':
           return candidate.hostname === 'mail.google.com';
+        case 'e5-outlook-mail':
+          return [
+            'outlook.cloud.microsoft',
+            'outlook.office.com',
+            'outlook.live.com',
+            'outlook.office365.com',
+          ].includes(candidate.hostname);
         case 'inbucket-mail':
           return Boolean(reference)
             && candidate.origin === reference.origin

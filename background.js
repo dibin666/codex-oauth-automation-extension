@@ -26,6 +26,7 @@ importScripts(
   'background/steps/platform-verify.js',
   'data/names.js',
   'hotmail-utils.js',
+  'e5-utils.js',
   'microsoft-email.js',
   'luckmail-utils.js',
   'cloudflare-temp-email-utils.js',
@@ -56,6 +57,16 @@ const {
   pickVerificationMessageWithTimeFallback,
   shouldClearHotmailCurrentSelection,
 } = self.HotmailUtils;
+const {
+  E5_INBOX_MODE_GMAIL,
+  E5_INBOX_MODE_OUTLOOK,
+  filterE5AccountsByStatus,
+  normalizeE5Account,
+  normalizeE5Accounts,
+  normalizeE5InboxMode,
+  pickE5AccountForRun,
+  shouldClearCurrentE5Selection,
+} = self.E5Utils;
 const {
   fetchMicrosoftMailboxMessages,
 } = self.MultiPageMicrosoftEmail;
@@ -126,10 +137,12 @@ const ICLOUD_LOGIN_URLS = [
 ];
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
+const E5_PROVIDER = 'e5-pool';
 const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
+const DEFAULT_E5_INBOX_URL = 'https://outlook.cloud.microsoft/';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
@@ -186,22 +199,8 @@ function setupDeclarativeNetRequestRules() {
 
   chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: [MICROSOFT_TOKEN_DNR_RULE_ID],
-    addRules: [{
-      id: MICROSOFT_TOKEN_DNR_RULE_ID,
-      priority: 1,
-      action: {
-        type: 'modifyHeaders',
-        requestHeaders: [
-          { header: 'Origin', operation: 'remove' },
-        ],
-      },
-      condition: {
-        urlFilter: 'login.microsoftonline.com/*/oauth2/v2.0/token',
-        resourceTypes: ['xmlhttprequest'],
-      },
-    }],
   }).catch((error) => {
-    console.warn(LOG_PREFIX, 'Failed to setup declarativeNetRequest rules:', error?.message || error);
+    console.warn(LOG_PREFIX, 'Failed to cleanup legacy declarativeNetRequest rules:', error?.message || error);
   });
 }
 
@@ -227,6 +226,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   verificationResendCount: DEFAULT_VERIFICATION_RESEND_COUNT,
   mailProvider: '163',
+  e5InboxMode: E5_INBOX_MODE_OUTLOOK,
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   emailGenerator: 'duck',
   autoDeleteUsedIcloudAlias: false,
@@ -249,6 +249,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   cloudflareTempEmailReceiveMailbox: '',
   cloudflareTempEmailDomain: '',
   cloudflareTempEmailDomains: [],
+  e5Accounts: [],
   hotmailAccounts: [],
 };
 
@@ -322,6 +323,7 @@ const DEFAULT_STATE = {
   loginVerificationRequestedAt: null,
   oauthFlowDeadlineAt: null,
   oauthFlowDeadlineSourceUrl: null,
+  currentE5AccountId: null,
   currentHotmailAccountId: null,
   preferredIcloudHost: '',
 };
@@ -619,9 +621,11 @@ function normalizePanelMode(value = '') {
 }
 
 function normalizeMailProvider(value = '') {
+  const e5Provider = typeof E5_PROVIDER !== 'undefined' ? E5_PROVIDER : 'e5-pool';
   const normalized = String(value || '').trim().toLowerCase();
   switch (normalized) {
     case 'custom':
+    case e5Provider:
     case ICLOUD_PROVIDER:
     case GMAIL_PROVIDER:
     case HOTMAIL_PROVIDER:
@@ -851,6 +855,8 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeVerificationResendCount(value, DEFAULT_VERIFICATION_RESEND_COUNT);
     case 'mailProvider':
       return normalizeMailProvider(value);
+    case 'e5InboxMode':
+      return normalizeE5InboxMode(value);
     case 'mail2925Mode':
       return normalizeMail2925Mode(value);
     case 'emailGenerator':
@@ -891,6 +897,8 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeCloudflareTempEmailDomain(value);
     case 'cloudflareTempEmailDomains':
       return normalizeCloudflareTempEmailDomains(value);
+    case 'e5Accounts':
+      return normalizeE5Accounts(value);
     case 'hotmailAccounts':
       return normalizeHotmailAccounts(value);
     default:
@@ -1072,6 +1080,7 @@ async function importSettingsBundle(configBundle) {
 
   const sessionUpdates = {
     ...importedSettings,
+    currentE5AccountId: null,
     currentHotmailAccountId: null,
     email: null,
   };
@@ -1079,6 +1088,7 @@ async function importSettingsBundle(configBundle) {
   await setState(sessionUpdates);
   broadcastDataUpdate({
     ...importedSettings,
+    currentE5AccountId: null,
     currentHotmailAccountId: null,
     ...(sessionUpdates.email !== undefined ? { email: sessionUpdates.email } : {}),
   });
@@ -1319,6 +1329,210 @@ function generatePassword() {
 
   // Shuffle
   return pw.split('').sort(() => Math.random() - 0.5).join('');
+}
+
+function findE5Account(accounts, accountId) {
+  return normalizeE5Accounts(accounts).find((account) => account.id === accountId) || null;
+}
+
+function isE5Provider(stateOrProvider) {
+  const provider = typeof stateOrProvider === 'string'
+    ? stateOrProvider
+    : stateOrProvider?.mailProvider;
+  return provider === E5_PROVIDER;
+}
+
+function getE5InboxMode(state = {}) {
+  return normalizeE5InboxMode(state?.e5InboxMode);
+}
+
+function isE5ManualInboxMode(state = {}) {
+  return isE5Provider(state) && getE5InboxMode(state) === E5_INBOX_MODE_OUTLOOK;
+}
+
+async function syncE5Accounts(accounts) {
+  const normalized = normalizeE5Accounts(accounts);
+  await setPersistentSettings({ e5Accounts: normalized });
+  await setState({ e5Accounts: normalized });
+  broadcastDataUpdate({ e5Accounts: normalized });
+  return normalized;
+}
+
+async function upsertE5Account(input) {
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  const normalizedEmail = String(input?.email || '').trim().toLowerCase();
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    throw new Error('E5 账号邮箱格式无效。');
+  }
+
+  const existing = input?.id
+    ? findE5Account(accounts, input.id)
+    : accounts.find((account) => account.email === normalizedEmail) || null;
+  const normalized = normalizeE5Account({
+    ...(existing || {}),
+    ...input,
+    email: normalizedEmail,
+    id: input?.id || existing?.id || crypto.randomUUID(),
+  });
+
+  const nextAccounts = existing
+    ? accounts.map((account) => (account.id === normalized.id ? normalized : account))
+    : [...accounts, normalized];
+
+  await syncE5Accounts(nextAccounts);
+  return normalized;
+}
+
+async function importE5Accounts(inputs = []) {
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  let nextAccounts = accounts.slice();
+  let importedCount = 0;
+
+  for (const input of Array.isArray(inputs) ? inputs : []) {
+    const normalizedEmail = String(input?.email || '').trim().toLowerCase();
+    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      continue;
+    }
+
+    const existing = nextAccounts.find((account) => account.email === normalizedEmail) || null;
+    const normalized = normalizeE5Account({
+      ...(existing || {}),
+      ...input,
+      email: normalizedEmail,
+      id: input?.id || existing?.id || crypto.randomUUID(),
+    });
+
+    nextAccounts = existing
+      ? nextAccounts.map((account) => (account.id === normalized.id ? normalized : account))
+      : [...nextAccounts, normalized];
+    importedCount += 1;
+  }
+
+  nextAccounts = await syncE5Accounts(nextAccounts);
+  return {
+    importedCount,
+    accounts: nextAccounts,
+  };
+}
+
+async function deleteE5Account(accountId) {
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  const nextAccounts = accounts.filter((account) => account.id !== accountId);
+  await syncE5Accounts(nextAccounts);
+
+  if (state.currentE5AccountId === accountId) {
+    await setState({ currentE5AccountId: null });
+    if (isE5Provider(state)) {
+      await setEmailState(null);
+    }
+    broadcastDataUpdate({ currentE5AccountId: null });
+  }
+}
+
+async function deleteE5Accounts(mode = 'all') {
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  const targets = filterE5AccountsByStatus(accounts, mode === 'registered' ? 'registered' : 'all');
+  const targetIds = new Set(targets.map((account) => account.id));
+  const nextAccounts = mode === 'registered'
+    ? accounts.filter((account) => !targetIds.has(account.id))
+    : [];
+
+  await syncE5Accounts(nextAccounts);
+
+  if (state.currentE5AccountId && targetIds.has(state.currentE5AccountId)) {
+    await setState({ currentE5AccountId: null });
+    if (isE5Provider(state)) {
+      await setEmailState(null);
+    }
+    broadcastDataUpdate({ currentE5AccountId: null });
+  }
+
+  return {
+    deletedCount: targets.length,
+    remainingCount: nextAccounts.length,
+  };
+}
+
+async function patchE5Account(accountId, updates = {}) {
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  const account = findE5Account(accounts, accountId);
+  if (!account) {
+    throw new Error('未找到对应的 E5 账号。');
+  }
+
+  const nextAccount = normalizeE5Account({
+    ...account,
+    ...updates,
+    id: account.id,
+  });
+
+  await syncE5Accounts(accounts.map((item) => (item.id === account.id ? nextAccount : item)));
+
+  if (state.currentE5AccountId === account.id && shouldClearCurrentE5Selection(nextAccount)) {
+    await setState({ currentE5AccountId: null });
+    broadcastDataUpdate({ currentE5AccountId: null });
+    if (isE5Provider(state)) {
+      await setEmailState(null);
+    }
+  }
+
+  return nextAccount;
+}
+
+async function setCurrentE5Account(accountId, options = {}) {
+  const { markSelected = false, syncEmail = true } = options;
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  const account = findE5Account(accounts, accountId);
+  if (!account) {
+    throw new Error('未找到对应的 E5 账号。');
+  }
+
+  if (markSelected) {
+    account.lastSelectedAt = Date.now();
+    await syncE5Accounts(accounts.map((item) => (item.id === account.id ? account : item)));
+  }
+
+  await setState({ currentE5AccountId: account.id });
+  broadcastDataUpdate({ currentE5AccountId: account.id });
+  if (syncEmail) {
+    await setEmailState(account.email || null);
+  }
+  return account;
+}
+
+async function ensureE5AccountForFlow(options = {}) {
+  const { allowAllocate = true, preferredAccountId = null } = options;
+  const state = await getState();
+  const accounts = normalizeE5Accounts(state.e5Accounts);
+  const isAccountAllocatable = (candidate) => Boolean(candidate)
+    && candidate.status !== 'registered'
+    && Boolean(candidate.email);
+
+  let account = null;
+  if (preferredAccountId) {
+    account = findE5Account(accounts, preferredAccountId);
+  }
+  if (!account && state.currentE5AccountId) {
+    account = findE5Account(accounts, state.currentE5AccountId);
+  }
+  if ((!account || !isAccountAllocatable(account)) && allowAllocate) {
+    account = pickE5AccountForRun(accounts, {});
+  }
+
+  if (!account) {
+    throw new Error('没有可用的 E5 账号。请先在侧边栏导入至少一个未注册邮箱。');
+  }
+  if (!isAccountAllocatable(account)) {
+    throw new Error(`E5 账号 ${account.email || account.id} 已标记为已注册，请选择其它账号或改回待注册。`);
+  }
+
+  return setCurrentE5Account(account.id, { markSelected: true, syncEmail: true });
 }
 
 function normalizeHotmailAccount(account = {}) {
@@ -2039,6 +2253,10 @@ function shouldUseCustomRegistrationEmail(state = {}) {
       && normalizeEmailGenerator(state.emailGenerator) === 'custom');
 }
 
+function shouldUseManualVerificationBypass(state = {}) {
+  return shouldUseCustomRegistrationEmail(state);
+}
+
 function buildGeneratedAliasEmail(state) {
   const provider = state.mailProvider || '163';
   const emailPrefix = (state.emailPrefix || '').trim();
@@ -2178,6 +2396,10 @@ function shouldUseCustomRegistrationEmail(state = {}) {
     || (!isHotmailProvider(state)
       && !isGeneratedAliasProvider(state)
       && normalizeEmailGenerator(state.emailGenerator) === 'custom');
+}
+
+function shouldUseManualVerificationBypass(state = {}) {
+  return shouldUseCustomRegistrationEmail(state);
 }
 
 function isReusableGeneratedAliasEmail(state = {}, email = state?.email) {
@@ -3441,6 +3663,20 @@ async function finalizeIcloudAliasAfterSuccessfulFlow(state) {
   }
 }
 
+async function finalizeE5AccountAfterSuccessfulFlow(state) {
+  if (!isE5Provider(state) || !state?.currentE5AccountId) {
+    return { handled: false, account: null };
+  }
+
+  const account = await patchE5Account(state.currentE5AccountId, {
+    status: 'registered',
+    lastRegisteredAt: Date.now(),
+    lastError: '',
+  });
+  await addLog(`当前 E5 账号 ${account.email} 已自动标记为已注册。`, 'ok');
+  return { handled: true, account };
+}
+
 // ============================================================
 // Tab Registry
 // ============================================================
@@ -3758,6 +3994,7 @@ function getSourceLabel(source) {
   }
   const labels = {
     'gmail-mail': 'Gmail 邮箱',
+    'e5-outlook-mail': 'E5 Outlook 邮箱',
     'sidepanel': '侧边栏',
     'signup-page': '认证页',
     'vps-panel': 'CPA 面板',
@@ -4822,6 +5059,9 @@ async function handleStepData(step, payload) {
         });
         await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
       }
+      if (typeof finalizeE5AccountAfterSuccessfulFlow === 'function') {
+        await finalizeE5AccountAfterSuccessfulFlow(latestState);
+      }
       if (isLuckmailProvider(latestState)) {
         const currentPurchase = getCurrentLuckmailPurchase(latestState);
         if (currentPurchase?.id) {
@@ -5465,6 +5705,15 @@ async function resumeAutoRunIfWaitingForEmail(options = {}) {
 
 async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   const currentState = await getState();
+  if (isE5Provider(currentState)) {
+    const account = await ensureE5AccountForFlow({
+      allowAllocate: true,
+      preferredAccountId: null,
+    });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 E5 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return account.email;
+  }
+
   if (isHotmailProvider(currentState)) {
     const account = await ensureHotmailAccountForFlow({
       allowAllocate: true,
@@ -5562,6 +5811,15 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
 async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   const currentState = await getState();
+  if (isE5Provider(currentState)) {
+    const account = await ensureE5AccountForFlow({
+      allowAllocate: true,
+      preferredAccountId: null,
+    });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 E5 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return account.email;
+  }
+
   if (isHotmailProvider(currentState)) {
     const account = await ensureHotmailAccountForFlow({
       allowAllocate: true,
@@ -5909,9 +6167,11 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   buildGeneratedAliasEmail,
   chrome,
   ensureContentScriptReadyOnTab,
+  ensureE5AccountForFlow,
   ensureHotmailAccountForFlow,
   ensureLuckmailPurchaseForFlow,
   getTabId,
+  isE5Provider,
   isGeneratedAliasProvider,
   isReusableGeneratedAliasEmail,
   isSignupEmailVerificationPageUrl,
@@ -5999,7 +6259,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
   sendToContentScriptResilient,
-  shouldUseCustomRegistrationEmail,
+  shouldUseManualVerificationBypass,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
   throwIfStopped,
 });
@@ -6050,7 +6310,7 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   rerunStep7ForStep8Recovery: (...args) => rerunStep7ForStep8Recovery(...args),
   reuseOrCreateTab,
   setState,
-  shouldUseCustomRegistrationEmail,
+  shouldUseManualVerificationBypass,
   sleepWithStop,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
   STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
@@ -6104,6 +6364,8 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearStopRequest,
   closeLocalhostCallbackTabs,
   closeTabsByUrlPrefix,
+  deleteE5Account,
+  deleteE5Accounts,
   deleteHotmailAccount,
   deleteHotmailAccounts,
   deleteIcloudAlias,
@@ -6115,6 +6377,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   executeStepViaCompletionSignal,
   exportSettingsBundle,
   fetchGeneratedEmail,
+  finalizeE5AccountAfterSuccessfulFlow,
   finalizeStep3Completion: async () => {
     const currentState = await getState();
     const signupTabId = await getTabId('signup-page');
@@ -6157,6 +6420,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   resumeAutoRun,
   scheduleAutoRun,
   selectLuckmailPurchase,
+  setCurrentE5Account,
   setCurrentHotmailAccount,
   setEmailState,
   setEmailStateSilently,
@@ -6171,8 +6435,11 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   skipAutoRunCountdown,
   skipStep,
   startAutoRunLoop,
+  importE5Accounts,
+  patchE5Account,
   syncHotmailAccounts,
   testHotmailAccountMailAccess,
+  upsertE5Account,
   upsertHotmailAccount,
   verifyHotmailAccount,
 });
@@ -6244,9 +6511,35 @@ async function executeStep3(state) {
 // ============================================================
 
 function getMailConfig(state) {
+  const e5Provider = typeof E5_PROVIDER !== 'undefined' ? E5_PROVIDER : 'e5-pool';
+  const e5InboxModeGmail = typeof E5_INBOX_MODE_GMAIL !== 'undefined' ? E5_INBOX_MODE_GMAIL : 'gmail';
+  const e5InboxUrl = typeof DEFAULT_E5_INBOX_URL !== 'undefined' ? DEFAULT_E5_INBOX_URL : 'https://outlook.cloud.microsoft/';
   const provider = state.mailProvider || 'qq';
   if (provider === 'custom') {
     return { provider: 'custom', label: '自定义邮箱' };
+  }
+  if (provider === e5Provider) {
+    if (getE5InboxMode(state) === e5InboxModeGmail) {
+      return {
+        provider: e5Provider,
+        source: 'gmail-mail',
+        url: 'https://mail.google.com/mail/u/0/#inbox',
+        label: 'E5 转发 Gmail 邮箱',
+        inject: ['content/activation-utils.js', 'content/utils.js', 'content/gmail-mail.js'],
+        injectSource: 'gmail-mail',
+      };
+    }
+    return {
+      provider: e5Provider,
+      source: 'e5-outlook-mail',
+      url: e5InboxUrl,
+      label: 'E5 Outlook 邮箱',
+      navigateOnReuse: true,
+      inject: ['content/activation-utils.js', 'content/utils.js', 'content/outlook-mail.js'],
+      injectSource: 'e5-outlook-mail',
+      requestFreshCodeFirst: false,
+      resendIntervalMs: 30000,
+    };
   }
   if (provider === HOTMAIL_PROVIDER) {
     return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（API对接/本地助手）' };

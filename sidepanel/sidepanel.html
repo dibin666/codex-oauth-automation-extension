@@ -164,6 +164,7 @@
         <div class="data-inline">
           <select id="select-mail-provider" class="data-select">
             <option value="custom">自定义邮箱</option>
+            <option value="e5-pool">E5 账号池</option>
             <option value="hotmail-api">Hotmail（账号池）</option>
             <option value="luckmail-api">LuckMail（API 购邮）</option>
             <option value="icloud">iCloud 邮箱</option>
@@ -386,6 +387,46 @@
       </div>
       <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
         <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
+      </div>
+    </div>
+    <div id="e5-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">E5 账号池</span>
+          <span class="data-value">手动导入邮箱，成功 OAuth 后自动标记已注册</span>
+        </div>
+        <div class="section-mini-actions">
+          <button id="btn-clear-registered-e5-accounts" class="btn btn-ghost btn-xs" type="button">清空已注册</button>
+          <button id="btn-delete-all-e5-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
+          <button id="btn-toggle-e5-list" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false">展开列表</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-e5-inbox-mode">
+        <span class="data-label">验证码来源</span>
+        <select id="select-e5-inbox-mode" class="data-select">
+          <option value="outlook">Outlook（默认打开 outlook.cloud.microsoft，自动提取验证码）</option>
+          <option value="gmail">Gmail（轮询转发后的验证码）</option>
+        </select>
+      </div>
+      <div class="data-row">
+        <span class="data-label">邮箱</span>
+        <input type="text" id="input-e5-email" class="data-input" placeholder="name@outlook.com" />
+      </div>
+      <div class="data-row hotmail-actions-row">
+        <span class="data-label"></span>
+        <button id="btn-add-e5-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
+      </div>
+      <div class="data-row hotmail-import-row">
+        <span class="data-label">批量导入</span>
+        <div class="hotmail-import-box">
+          <textarea id="input-e5-import" class="data-textarea mono"
+            placeholder="每行一个邮箱，可追加“已注册”标记&#10;alpha@outlook.com&#10;beta@outlook.com 已注册"></textarea>
+          <button id="btn-import-e5-accounts" class="btn btn-outline btn-sm" type="button">导入</button>
+        </div>
+      </div>
+      <div id="e5-list-shell" class="hotmail-list-shell is-collapsed">
+        <div id="e5-accounts-list" class="hotmail-accounts-list"></div>
       </div>
     </div>
     <div id="luckmail-section" class="data-card luckmail-card" style="display:none;">
@@ -622,9 +663,11 @@
   <script src="../managed-alias-utils.js"></script>
   <script src="../icloud-utils.js"></script>
   <script src="../hotmail-utils.js"></script>
+  <script src="../e5-utils.js"></script>
   <script src="../luckmail-utils.js"></script>
   <script src="../data/step-definitions.js"></script>
   <script src="update-service.js"></script>
+  <script src="e5-manager.js"></script>
   <script src="hotmail-manager.js"></script>
   <script src="icloud-manager.js"></script>
   <script src="luckmail-manager.js"></script>

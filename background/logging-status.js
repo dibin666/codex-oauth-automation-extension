@@ -24,6 +24,8 @@
         'mail-2925': '2925 邮箱',
         'inbucket-mail': 'Inbucket 邮箱',
         'duck-mail': 'Duck 邮箱',
+        'e5-outlook-mail': 'E5 Outlook 邮箱',
+        'e5-pool': 'E5 账号池',
         'hotmail-api': 'Hotmail（API对接/本地助手）',
         'luckmail-api': 'LuckMail（API 购邮）',
         'cloudflare-temp-email': 'Cloudflare Temp Email',

@@ -16,15 +16,26 @@
       resolveVerificationStep,
       reuseOrCreateTab,
       sendToContentScriptResilient,
-      shouldUseCustomRegistrationEmail,
+      shouldUseManualVerificationBypass,
       STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
       throwIfStopped,
     } = deps;
+    const resolveManualVerificationBypass = typeof shouldUseManualVerificationBypass === 'function'
+      ? shouldUseManualVerificationBypass
+      : (typeof deps.shouldUseCustomRegistrationEmail === 'function' ? deps.shouldUseCustomRegistrationEmail : () => false);
 
     async function executeStep4(state) {
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
       const stepStartedAt = Date.now();
+      const resendIntervalMs = Number.isFinite(Number(mail?.resendIntervalMs))
+        ? Math.max(0, Number(mail.resendIntervalMs))
+        : ((mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
+          ? 0
+          : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS);
+      const requestFreshCodeFirst = typeof mail?.requestFreshCodeFirst === 'boolean'
+        ? mail.requestFreshCodeFirst
+        : mail.provider !== HOTMAIL_PROVIDER;
       const signupTabId = await getTabId('signup-page');
       if (!signupTabId) {
         throw new Error('认证页面标签页已关闭，无法继续步骤 4。');
@@ -60,7 +71,14 @@
         return;
       }
 
-      if (shouldUseCustomRegistrationEmail(state)) {
+      if (resolveManualVerificationBypass(state)) {
+        if (mail.url && mail.source) {
+          await addLog(`步骤 4：正在打开${mail.label}...`);
+          await reuseOrCreateTab(mail.source, mail.url, {
+            inject: mail.inject,
+            injectSource: mail.injectSource,
+          });
+        }
         await confirmCustomVerificationStepBypass(4);
         return;
       }
@@ -92,10 +110,10 @@
 
       await resolveVerificationStep(4, state, mail, {
         filterAfterTimestamp: stepStartedAt,
-        requestFreshCodeFirst: mail.provider === HOTMAIL_PROVIDER ? false : true,
-        resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
-          ? 0
-          : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
+        requestFreshCodeFirst,
+        resendIntervalMs,
+        mailTabSource: mail.source === 'e5-outlook-mail' ? mail.source : '',
+        mailTabLabel: mail.label || '',
       });
     }
 

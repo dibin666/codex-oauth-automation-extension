@@ -6,8 +6,10 @@
       buildGeneratedAliasEmail,
       chrome,
       ensureContentScriptReadyOnTab,
+      ensureE5AccountForFlow,
       ensureHotmailAccountForFlow,
       ensureLuckmailPurchaseForFlow,
+      isE5Provider,
       isGeneratedAliasProvider,
       isReusableGeneratedAliasEmail,
       isHotmailProvider,
@@ -21,6 +23,8 @@
       SIGNUP_PAGE_INJECT_FILES,
       waitForTabUrlMatch,
     } = deps;
+    const resolveIsE5Provider = typeof isE5Provider === 'function' ? isE5Provider : () => false;
+    const resolveEnsureE5AccountForFlow = typeof ensureE5AccountForFlow === 'function' ? ensureE5AccountForFlow : null;
 
     async function openSignupEntryTab(step = 1) {
       const tabId = await reuseOrCreateTab('signup-page', SIGNUP_ENTRY_URL, {
@@ -187,7 +191,13 @@
 
     async function resolveSignupEmailForFlow(state) {
       let resolvedEmail = state.email;
-      if (isHotmailProvider(state)) {
+      if (resolveIsE5Provider(state) && resolveEnsureE5AccountForFlow) {
+        const account = await resolveEnsureE5AccountForFlow({
+          allowAllocate: true,
+          preferredAccountId: state.currentE5AccountId || null,
+        });
+        resolvedEmail = account.email;
+      } else if (isHotmailProvider(state)) {
         const account = await ensureHotmailAccountForFlow({
           allowAllocate: true,
           markUsed: true,

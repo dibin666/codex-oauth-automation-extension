@@ -84,7 +84,7 @@
 
     async function confirmCustomVerificationStepBypass(step) {
       const verificationLabel = getVerificationCodeLabel(step);
-      await addLog(`步骤 ${step}：当前为自定义邮箱模式，请手动在页面中输入${verificationLabel}验证码并进入下一页面。`, 'warn');
+      await addLog(`步骤 ${step}：当前邮箱服务需要手动处理，请在页面中输入${verificationLabel}验证码并进入下一页面。`, 'warn');
 
       let response = null;
       try {
@@ -225,7 +225,15 @@
       }
 
       const currentState = await getState();
-      if (currentState.mailProvider === '2925') {
+      const mailTabSource = String(options.mailTabSource || '').trim();
+      const mailTabLabel = String(options.mailTabLabel || '').trim();
+      if (mailTabSource) {
+        const mailTabId = await getTabId(mailTabSource);
+        if (mailTabId) {
+          await chrome.tabs.update(mailTabId, { active: true });
+          await addLog(`步骤 ${step}：已切换回${mailTabLabel || '邮箱'}标签页等待新邮件。`, 'info');
+        }
+      } else if (currentState.mailProvider === '2925') {
         const mailTabId = await getTabId('mail-2925');
         if (mailTabId) {
           await chrome.tabs.update(mailTabId, { active: true });

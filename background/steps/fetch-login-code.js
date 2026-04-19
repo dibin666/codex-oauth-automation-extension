@@ -21,11 +21,14 @@
       rerunStep7ForStep8Recovery,
       reuseOrCreateTab,
       setState,
-      shouldUseCustomRegistrationEmail,
+      shouldUseManualVerificationBypass,
       STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
       STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
       throwIfStopped,
     } = deps;
+    const resolveManualVerificationBypass = typeof shouldUseManualVerificationBypass === 'function'
+      ? shouldUseManualVerificationBypass
+      : (typeof deps.shouldUseCustomRegistrationEmail === 'function' ? deps.shouldUseCustomRegistrationEmail : () => false);
 
     async function getStep8ReadyTimeoutMs(actionLabel, expectedOauthUrl = '') {
       if (typeof getOAuthFlowStepTimeoutMs !== 'function') {
@@ -60,6 +63,11 @@
       if (mail.error) throw new Error(mail.error);
 
       const stepStartedAt = Date.now();
+      const resendIntervalMs = Number.isFinite(Number(mail?.resendIntervalMs))
+        ? Math.max(0, Number(mail.resendIntervalMs))
+        : ((mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
+          ? 0
+          : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS);
       const authTabId = await getTabId('signup-page');
 
       if (authTabId) {
@@ -92,7 +100,14 @@
         await addLog(`步骤 8：已固定当前验证码页显示邮箱 ${displayedVerificationEmail} 作为后续匹配目标。`, 'info');
       }
 
-      if (shouldUseCustomRegistrationEmail(state)) {
+      if (resolveManualVerificationBypass(state)) {
+        if (mail.url && mail.source) {
+          await addLog(`步骤 8：正在打开${mail.label}...`);
+          await reuseOrCreateTab(mail.source, mail.url, {
+            inject: mail.inject,
+            injectSource: mail.injectSource,
+          });
+        }
         await confirmCustomVerificationStepBypass(8);
         return;
       }
@@ -134,9 +149,9 @@
         getRemainingTimeMs: getStep8RemainingTimeResolver(state?.oauthUrl || ''),
         requestFreshCodeFirst: false,
         targetEmail: fixedTargetEmail,
-        resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
-          ? 0
-          : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
+        resendIntervalMs,
+        mailTabSource: mail.source === 'e5-outlook-mail' ? mail.source : '',
+        mailTabLabel: mail.label || '',
       });
     }
 

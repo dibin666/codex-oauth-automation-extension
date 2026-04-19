@@ -8,3 +8,6 @@
 /data/account-run-history.json
 .npm-test.log
 .omx/
+.trellis/
+.agents/
+.codex/
