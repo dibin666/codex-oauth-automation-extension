@@ -321,6 +321,7 @@ const DEFAULT_STATE = {
   signupVerificationRequestedAt: null,
   loginVerificationRequestedAt: null,
   oauthFlowDeadlineAt: null,
+  oauthFlowDeadlineSourceUrl: null,
   currentHotmailAccountId: null,
   preferredIcloudHost: '',
 };
@@ -3975,6 +3976,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -3987,6 +3989,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -3998,6 +4001,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4008,6 +4012,7 @@ function getDownstreamStateResets(step) {
       lastLoginCode: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       localhostUrl: null,
     };
   }
@@ -4612,7 +4617,11 @@ async function skipStep(step) {
   return { ok: true, step, status: 'skipped' };
 }
 
-function throwIfStopped() {
+function throwIfStopped(error = null) {
+  const errorMessage = typeof error === 'string' ? error : error?.message;
+  if (errorMessage === STOP_ERROR_MESSAGE) {
+    throw error instanceof Error ? error : new Error(STOP_ERROR_MESSAGE);
+  }
   if (stopRequested) {
     throw new Error(STOP_ERROR_MESSAGE);
   }
@@ -4796,6 +4805,7 @@ async function handleStepData(step, payload) {
         await setState({
           localhostUrl: payload.localhostUrl,
           oauthFlowDeadlineAt: null,
+          oauthFlowDeadlineSourceUrl: null,
         });
         broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
       }
@@ -4993,6 +5003,59 @@ async function waitForRunningStepsToFinish(payload = {}) {
   return currentState;
 }
 
+const AUTH_CHAIN_STEP_IDS = new Set([7, 8, 9, 10]);
+let activeTopLevelAuthChainExecution = null;
+
+function isAuthChainStep(step) {
+  return AUTH_CHAIN_STEP_IDS.has(Number(step));
+}
+
+async function acquireTopLevelAuthChainExecution(step) {
+  const normalizedStep = Number(step);
+  if (!isAuthChainStep(normalizedStep)) {
+    return {
+      joined: false,
+      release() {},
+    };
+  }
+
+  if (activeTopLevelAuthChainExecution) {
+    const activeExecution = activeTopLevelAuthChainExecution;
+    await addLog(
+      `步骤 ${normalizedStep}：检测到步骤 ${activeExecution.step} 正在运行，本次请求将复用当前授权链，不再重复启动。`,
+      'warn'
+    );
+    const result = await activeExecution.promise;
+    if (result?.error) {
+      throw result.error;
+    }
+    return {
+      joined: true,
+      release() {},
+    };
+  }
+
+  let settleExecution = () => {};
+  const promise = new Promise((resolve) => {
+    settleExecution = (error = null) => resolve({ error });
+  });
+  const execution = {
+    step: normalizedStep,
+    promise,
+  };
+  activeTopLevelAuthChainExecution = execution;
+
+  return {
+    joined: false,
+    release(error = null) {
+      if (activeTopLevelAuthChainExecution === execution) {
+        activeTopLevelAuthChainExecution = null;
+      }
+      settleExecution(error);
+    },
+  };
+}
+
 async function markRunningStepsStopped() {
   const state = await getState();
   const runningSteps = getRunningSteps(state.stepStatuses);
@@ -5089,21 +5152,29 @@ async function requestStop(options = {}) {
 async function executeStep(step, options = {}) {
   const { deferRetryableTransportError = false } = options;
   console.log(LOG_PREFIX, `Executing step ${step}`);
-  throwIfStopped();
-  await setStepStatus(step, 'running');
-  await addLog(`步骤 ${step} 开始执行`);
-  await humanStepDelay();
-
-  const state = await getState();
-
-  // Set flow start time on first step
-  if (step === 1 && !state.flowStartTime) {
-    await setState({ flowStartTime: Date.now() });
+  const authChainClaim = await acquireTopLevelAuthChainExecution(step);
+  if (authChainClaim.joined) {
+    return;
   }
 
+  let executionError = null;
+  throwIfStopped();
   try {
+    await setStepStatus(step, 'running');
+    await addLog(`步骤 ${step} 开始执行`);
+    await humanStepDelay();
+
+    const state = await getState();
+
+    // Set flow start time on first step
+    if (step === 1 && !state.flowStartTime) {
+      await setState({ flowStartTime: Date.now() });
+    }
+
     await stepRegistry.executeStep(step, state);
   } catch (err) {
+    executionError = err;
+    const state = await getState();
     if (isStopError(err)) {
       await setStepStatus(step, 'stopped');
       await addLog(`步骤 ${step} 已被用户停止`, 'warn');
@@ -5125,6 +5196,8 @@ async function executeStep(step, options = {}) {
       );
     }
     throw err;
+  } finally {
+    authChainClaim.release(executionError);
   }
 }
 
@@ -5963,7 +6036,6 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
   ensureStep8VerificationPageReady,
-  executeStep7: (...args) => executeStep7(...args),
   getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getPanelMode,
@@ -5975,9 +6047,9 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   isVerificationMailPollingError,
   LUCKMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
+  rerunStep7ForStep8Recovery: (...args) => rerunStep7ForStep8Recovery(...args),
   reuseOrCreateTab,
   setState,
-  setStepStatus,
   shouldUseCustomRegistrationEmail,
   sleepWithStop,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
@@ -6455,10 +6527,18 @@ function normalizeOAuthFlowDeadlineAt(value) {
   return Math.floor(numeric);
 }
 
+function normalizeOAuthFlowSourceUrl(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
 async function startOAuthFlowTimeoutWindow(options = {}) {
   const step = Number(options.step) || 7;
   const deadlineAt = Date.now() + OAUTH_FLOW_TIMEOUT_MS;
-  await setState({ oauthFlowDeadlineAt: deadlineAt });
+  await setState({
+    oauthFlowDeadlineAt: deadlineAt,
+    oauthFlowDeadlineSourceUrl: normalizeOAuthFlowSourceUrl(options.oauthUrl),
+  });
   await addLog(`步骤 ${step}：已拿到新的 OAuth 登录地址，开始 6 分钟倒计时。`, 'info');
   return deadlineAt;
 }
@@ -6468,7 +6548,19 @@ async function getOAuthFlowRemainingMs(options = {}) {
   const actionLabel = String(options.actionLabel || '后续授权流程').trim() || '后续授权流程';
   const state = options.state || await getState();
   const deadlineAt = normalizeOAuthFlowDeadlineAt(state?.oauthFlowDeadlineAt);
+  const deadlineSourceUrl = normalizeOAuthFlowSourceUrl(state?.oauthFlowDeadlineSourceUrl);
+  const currentOauthUrl = normalizeOAuthFlowSourceUrl(options.oauthUrl !== undefined ? options.oauthUrl : state?.oauthUrl);
   if (!deadlineAt) {
+    return null;
+  }
+
+  if (deadlineSourceUrl && currentOauthUrl && deadlineSourceUrl !== currentOauthUrl) {
+    console.warn(LOG_PREFIX, '[oauth-flow] ignoring stale deadline due to oauth url mismatch', {
+      step,
+      actionLabel,
+      deadlineSourceUrl,
+      currentOauthUrl,
+    });
     return null;
   }
 
@@ -6615,6 +6707,43 @@ async function ensureStep8VerificationPageReady(options = {}) {
   const stateLabel = getLoginAuthStateLabel(pageState.state);
   const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
   throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：${stateLabel}.${urlPart}`.trim());
+}
+
+async function rerunStep7ForStep8Recovery(options = {}) {
+  const {
+    logMessage = '步骤 8：正在回到步骤 7，重新发起登录验证码流程...',
+    postStepDelayMs = 3000,
+  } = options;
+
+  throwIfStopped();
+  const initialState = await getState();
+  await addLog(logMessage, 'warn');
+  await setStepStatus(7, 'running');
+  await addLog('步骤 7 开始执行');
+
+  try {
+    await step7Executor.executeStep7(initialState);
+  } catch (err) {
+    const latestState = await getState();
+    if (isStopError(err)) {
+      await setStepStatus(7, 'stopped');
+      await addLog('步骤 7 已被用户停止', 'warn');
+      await appendManualAccountRunRecordIfNeeded('step7_stopped', latestState, getErrorMessage(err));
+      throw err;
+    }
+    if (isTerminalSecurityBlockedError(err)) {
+      await handleCloudflareSecurityBlocked(err);
+      throw new Error(STOP_ERROR_MESSAGE);
+    }
+    await setStepStatus(7, 'failed');
+    await addLog(`步骤 7 失败：${getErrorMessage(err)}`, 'error');
+    await appendManualAccountRunRecordIfNeeded('step7_failed', latestState, getErrorMessage(err));
+    throw err;
+  }
+
+  if (postStepDelayMs > 0) {
+    await sleepWithStop(postStepDelayMs);
+  }
 }
 
 async function executeStep6() {

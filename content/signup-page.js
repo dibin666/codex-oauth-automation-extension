@@ -1671,7 +1671,7 @@ async function fillVerificationCode(step, payload) {
 }
 
 // ============================================================
-// Step 6: Login with registered account (on OAuth auth page)
+// Step 7: Login with registered account (on OAuth auth page)
 // ============================================================
 
 async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 12000) {
