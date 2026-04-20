@@ -3,6 +3,7 @@
 importScripts(
   'managed-alias-utils.js',
   'background/account-run-history.js',
+  'background/contribution-oauth.js',
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
   'background/signup-flow-helpers.js',
@@ -188,6 +189,23 @@ const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
 const PERSISTENT_ALIAS_STATE_KEYS = ['manualAliasUsage', 'preservedAliases'];
 const ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory';
+const CONTRIBUTION_RUNTIME_DEFAULTS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_DEFAULTS || {
+  contributionMode: false,
+  contributionModeExpected: false,
+  contributionSessionId: '',
+  contributionAuthUrl: '',
+  contributionAuthState: '',
+  contributionCallbackUrl: '',
+  contributionStatus: '',
+  contributionStatusMessage: '',
+  contributionLastPollAt: 0,
+  contributionCallbackStatus: 'idle',
+  contributionCallbackMessage: '',
+  contributionAuthOpenedAt: 0,
+  contributionAuthTabId: 0,
+};
+const CONTRIBUTION_RUNTIME_KEYS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_KEYS
+  || Object.keys(CONTRIBUTION_RUNTIME_DEFAULTS);
 
 initializeSessionStorageAccess();
 setupDeclarativeNetRequestRules();
@@ -277,6 +295,7 @@ const PRE_LOGIN_COOKIE_CLEAR_ORIGINS = [
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
   stepStatuses: Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending'])),
+  ...CONTRIBUTION_RUNTIME_DEFAULTS,
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
@@ -1128,6 +1147,67 @@ async function setPasswordState(password) {
   broadcastDataUpdate({ password });
 }
 
+function buildContributionModeState(enabled, persistedSettings = {}, currentState = {}) {
+  const currentContributionState = {};
+  for (const key of CONTRIBUTION_RUNTIME_KEYS) {
+    currentContributionState[key] = currentState[key] !== undefined
+      ? currentState[key]
+      : CONTRIBUTION_RUNTIME_DEFAULTS[key];
+  }
+
+  if (enabled) {
+    return {
+      ...currentContributionState,
+      contributionMode: true,
+      contributionModeExpected: true,
+      panelMode: 'cpa',
+      customPassword: '',
+      accountRunHistoryTextEnabled: false,
+    };
+  }
+
+  return {
+    ...CONTRIBUTION_RUNTIME_DEFAULTS,
+    contributionMode: false,
+    contributionModeExpected: false,
+    panelMode: persistedSettings.panelMode || DEFAULT_STATE.panelMode,
+    customPassword: persistedSettings.customPassword || '',
+    accountRunHistoryTextEnabled: Boolean(persistedSettings.accountRunHistoryTextEnabled),
+  };
+}
+
+async function setContributionMode(enabled) {
+  const normalizedEnabled = Boolean(enabled);
+  const [persistedSettings, currentState] = await Promise.all([
+    getPersistedSettings(),
+    getState(),
+  ]);
+
+  if (normalizedEnabled) {
+    await setPersistentSettings({ panelMode: 'cpa' });
+  }
+
+  const updates = buildContributionModeState(normalizedEnabled, {
+    ...persistedSettings,
+    ...(normalizedEnabled ? { panelMode: 'cpa' } : {}),
+  }, currentState);
+
+  await setState(updates);
+  const nextState = await getState();
+  const contributionBroadcast = {};
+  for (const key of CONTRIBUTION_RUNTIME_KEYS) {
+    contributionBroadcast[key] = nextState[key];
+  }
+  broadcastDataUpdate({
+    ...contributionBroadcast,
+    panelMode: nextState.panelMode,
+    customPassword: nextState.customPassword,
+    accountRunHistoryTextEnabled: nextState.accountRunHistoryTextEnabled,
+    accountRunHistoryHelperBaseUrl: nextState.accountRunHistoryHelperBaseUrl,
+  });
+  return nextState;
+}
+
 function getLuckmailUsedPurchases(state = {}) {
   return normalizeLuckmailUsedPurchases(state?.luckmailUsedPurchases);
 }
@@ -1278,15 +1358,21 @@ async function resetState() {
       'luckmailPreserveTagId',
       'luckmailPreserveTagName',
       'preferredIcloudHost',
+      ...CONTRIBUTION_RUNTIME_KEYS,
     ]),
     getPersistedSettings(),
     getPersistedAliasState(),
   ]);
+  const contributionModeState = buildContributionModeState(Boolean(prev.contributionMode), {
+    ...persistedSettings,
+    ...(prev.contributionMode ? { panelMode: 'cpa' } : {}),
+  }, prev);
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
     ...persistedSettings,
     ...persistedAliasState,
+    ...contributionModeState,
     seenCodes: prev.seenCodes || [],
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
@@ -5584,6 +5670,15 @@ const accountRunHistoryHelpers = self.MultiPageBackgroundAccountRunHistory?.crea
   getState,
   normalizeAccountRunHistoryHelperBaseUrl,
 });
+const contributionOAuthManager = self.MultiPageBackgroundContributionOAuth?.createContributionOAuthManager({
+  addLog,
+  broadcastDataUpdate,
+  chrome,
+  closeLocalhostCallbackTabs,
+  getState,
+  setState,
+});
+contributionOAuthManager?.ensureCallbackListeners?.();
 
 async function broadcastAccountRunHistoryUpdate() {
   if (!accountRunHistoryHelpers?.getPersistedAccountRunHistory) {
@@ -6345,7 +6440,7 @@ const stepExecutorsByKey = {
   'oauth-login': (state) => step7Executor.executeStep7(state),
   'fetch-login-code': (state) => step8Executor.executeStep8(state),
   'confirm-oauth': (state) => step9Executor.executeStep9(state),
-  'platform-verify': (state) => step10Executor.executeStep10(state),
+  'platform-verify': (state) => executeStep10(state),
 };
 const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter({
   addLog,
@@ -6422,6 +6517,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   selectLuckmailPurchase,
   setCurrentE5Account,
   setCurrentHotmailAccount,
+  setContributionMode,
   setEmailState,
   setEmailStateSilently,
   setIcloudAliasPreservedState,
@@ -6434,9 +6530,11 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   setStepStatus,
   skipAutoRunCountdown,
   skipStep,
+  startContributionFlow: (...args) => contributionOAuthManager?.startContributionFlow?.(...args),
   startAutoRunLoop,
   importE5Accounts,
   patchE5Account,
+  pollContributionStatus: (...args) => contributionOAuthManager?.pollContributionStatus?.(...args),
   syncHotmailAccounts,
   testHotmailAccountMailAccess,
   upsertE5Account,
@@ -6794,7 +6892,24 @@ async function runPreStep6CookieCleanup() {
 // ============================================================
 
 async function refreshOAuthUrlBeforeStep6(state) {
-  await addLog(`步骤 7：正在刷新登录用的 ${getPanelModeLabel(state)} OAuth 链接...`);
+  if (state?.contributionModeExpected && !state?.contributionMode) {
+    throw new Error('步骤 7：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API 链路。请重新进入贡献模式后再点击自动。');
+  }
+  if (state?.contributionMode && contributionOAuthManager?.startContributionFlow) {
+    await addLog('步骤 7：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...', 'info');
+    const contributionState = await contributionOAuthManager.startContributionFlow({
+      nickname: state.email,
+      openAuthTab: false,
+      stateOverride: state,
+    });
+    const oauthUrl = String(contributionState?.contributionAuthUrl || '').trim();
+    if (!oauthUrl) {
+      throw new Error('贡献模式未返回可用的登录地址，请稍后重试。');
+    }
+    await handleStepData(1, { oauthUrl });
+    return oauthUrl;
+  }
+  await addLog(`步骤 7：contributionMode=false，走普通 CPA / SUB2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info');
   console.log(LOG_PREFIX, '[refreshOAuthUrlBeforeStep6] requesting fresh OAuth directly from panel');
   const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: '步骤 7' });
   await handleStepData(1, refreshResult);
@@ -7455,7 +7570,76 @@ async function executeStep9(state) {
 // Step 10: 平台回调验证
 // ============================================================
 
+async function executeContributionStep10(state) {
+  if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
+    throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+  }
+  if (!state.localhostUrl) {
+    throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+  }
+  if (!state.contributionSessionId) {
+    throw new Error('缺少贡献会话信息，请重新从步骤 7 开始。');
+  }
+  if (!contributionOAuthManager?.pollContributionStatus) {
+    throw new Error('贡献 OAuth 流程尚未接入，无法完成贡献模式的步骤 10。');
+  }
+
+  await addLog('步骤 10：贡献模式正在提交回调并等待最终结果...');
+
+  let latestState = await getState();
+  const callbackUrl = latestState.localhostUrl || state.localhostUrl;
+
+  if (!latestState.contributionCallbackUrl && contributionOAuthManager?.handleCapturedCallback) {
+    latestState = await contributionOAuthManager.handleCapturedCallback(callbackUrl, {
+      source: 'step10',
+    });
+  } else {
+    latestState = await contributionOAuthManager.pollContributionStatus({
+      reason: 'step10_initial',
+      stateOverride: latestState,
+    });
+  }
+
+  const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
+    ? await getOAuthFlowStepTimeoutMs(120000, {
+      step: 10,
+      actionLabel: '贡献流程最终结果',
+    })
+    : 120000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = String(latestState.contributionStatus || '').trim().toLowerCase();
+    if (contributionOAuthManager?.isContributionFinalStatus?.(status)) {
+      if (status === 'auto_approved' || status === 'manual_review_required') {
+        await addLog(`步骤 10：贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, status === 'auto_approved' ? 'ok' : 'warn');
+        await completeStepFromBackground(10, {
+          contributionStatus: status,
+          contributionStatusMessage: latestState.contributionStatusMessage || '',
+          localhostUrl: callbackUrl,
+        });
+        return;
+      }
+      throw new Error(latestState.contributionStatusMessage || '贡献流程失败。');
+    }
+
+    await sleepWithStop(2500);
+    latestState = await contributionOAuthManager.pollContributionStatus({
+      reason: 'step10_wait_final',
+      stateOverride: latestState,
+    });
+  }
+
+  throw new Error('步骤 10：等待贡献流程最终结果超时。');
+}
+
 async function executeStep10(state) {
+  if (state?.contributionModeExpected && !state?.contributionMode) {
+    throw new Error('步骤 10：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API 提交。请重新进入贡献模式后再点击自动。');
+  }
+  if (state?.contributionMode) {
+    return executeContributionStep10(state);
+  }
   return step10Executor.executeStep10(state);
 }
 
